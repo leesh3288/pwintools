@@ -18,6 +18,6 @@ setup(
         'PythonForWindows==0.4',
     ],
     dependency_links=[
-        'git+git://github.com/hakril/PythonForWindows@master#egg=PythonForWindows-0.4',
+        'git+git://github.com/hakril/PythonForWindows@V0.4#egg=PythonForWindows-0.4',
     ]
 )
