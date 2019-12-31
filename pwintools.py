@@ -162,37 +162,37 @@ def p64(i):
     """p64(i) -> str
     Pack 64 bits integer (little endian)
     """
-    return struct.pack('<q', i)
+    return struct.pack('<Q', i)
 
 def u64(s):
     """u64(s) -> int
     Unpack 64 bits integer from a little endian str representation
     """
-    return struct.unpack('<q', s)[0]
+    return struct.unpack('<Q', s)[0]
 
 def p32(i):
     """p32(i) -> str
     Pack 32 bits integer (little endian)
     """
-    return struct.pack('<i', i)
+    return struct.pack('<I', i)
 
 def u32(s):
     """u32(s) -> int
     Unpack 32 bits integer from a little endian str representation
     """
-    return struct.unpack('<i', s)[0]
+    return struct.unpack('<I', s)[0]
     
 def p16(i):
     """p16(i) -> str
     Pack 16 bits integer (little endian)
     """
-    return struct.pack('<h', i)
+    return struct.pack('<H', i)
 
 def u16(s):
     """u16(s) -> int
     Unpack 16 bits integer from a little endian str representation
     """
-    return struct.unpack('<h', s)[0]
+    return struct.unpack('<H', s)[0]
 
 CreatePipePrototype = gdef.WINFUNCTYPE(gdef.BOOL, gdef.PHANDLE, gdef.PHANDLE, gdef.LPSECURITY_ATTRIBUTES, gdef.DWORD)
 CreatePipeParams = ((1, 'hReadPipe'), (1, 'hReadPipe'), (1, 'lpPipeAttributes'), (1, 'nSize'))
@@ -402,7 +402,7 @@ class Remote(object):
             log.error("EOFError: Socket {:s} connection failed".format(self))
             
         self._closed = False
-        self.newline = '\n'
+        self.newline = '\r\n'
     
     def __repr__(self):
         return '<{0} "{1}:{2}" at {3}>'.format(self.__class__.__name__, self.ip, self.port, hex(id(self)))
@@ -434,7 +434,8 @@ class Remote(object):
     
     def read(self, n, timeout = None, no_warning = False):
         """read(n, timeout = None, no_warning = False) tries to read n bytes on the socket before timeout"""
-        self.timeout = timeout
+        if timeout:
+            self.timeout = timeout
         buf = ''
         if not self.check_closed(False):
             try:
@@ -480,16 +481,16 @@ class Remote(object):
         """recvall(force_exception = False, timeout = None) reads all bytes available on the socket before timeout"""
         return self.read(0x100000, timeout, no_warning = True)
         
-    def recvuntil(self, delim, timeout = None):
+    def recvuntil(self, delim, drop = False, timeout = None):
         """recvuntil(delim, timeout = None) reads bytes until the delim is present on the socket before timeout"""
         buf = ''
         while delim not in buf:
             buf += self.recvn(1, timeout)
-        return buf
+        return buf if not drop else buf[:-len(delim)]
         
-    def recvline(self, timeout = None):
+    def recvline(self, keepends = True, timeout = None):
         """recvline(timeout = None) reads one line on the socket before timeout"""
-        return self.recvuntil(self.newline, timeout)
+        return self.recvuntil(self.newline, drop = not keepends, timeout = timeout)
             
     def interactive(self, escape = False):
         """interactive(escape = None) allows to interact directly with the socket (escape to show binary content received)"""
@@ -515,7 +516,12 @@ class Process(windows.winobject.process.WinProcess):
         self.flags = flags
         self.stdhandles = not nostdhandles
         self.debuggerpath = r'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\windbg.exe'
-        self.newline = '\n'
+        self.x96dbg_path = None  # initialize path before use, or simply modify this line of code
+        self.newline = '\r\n'
+        self.__imports = None
+        self.__symbols = None
+        self.__libs = None
+        self.__offsets = None
         
         if self.stdhandles:
             self.stdin = Pipe()
@@ -607,7 +613,8 @@ class Process(windows.winobject.process.WinProcess):
     
     def read(self, n, timeout = None, no_warning = False):
         """read(n, timeout = None, no_warning = False) tries to read n bytes on process stdout before timeout"""
-        self.timeout = timeout
+        if timeout:
+            self.timeout = timeout
         buf = ''
         if self.stdhandles and not self.check_exit():
             buf = self.stdout.read(n)
@@ -642,17 +649,17 @@ class Process(windows.winobject.process.WinProcess):
     def recvall(self, force_exception = False, timeout = None):
         """recvall(force_exception = False, timeout = None) reads all bytes available on the process stdout before timeout"""
         return self.read(0x100000, timeout, no_warning = True)
-        
-    def recvuntil(self, delim, timeout = None):
+
+    def recvuntil(self, delim, drop = False, timeout = None):
         """recvuntil(delim, timeout = None) reads bytes until the delim is present on the process stdout before timeout"""
         buf = ''
         while delim not in buf:
             buf += self.recvn(1, timeout)
-        return buf
+        return buf if not drop else buf[:-len(delim)]
         
-    def recvline(self, timeout = None):
+    def recvline(self, keepends = True, timeout = None):
         """recvline(timeout = None) reads one line on the process stdout before timeout"""
-        return self.recvuntil(self.newline, timeout)
+        return self.recvuntil(self.newline, drop = not keepends, timeout = timeout)
             
     def interactive(self, escape = False):
         """interactive(escape = None) allows to interact directly with the socket (escape to show binary content received)"""
@@ -693,9 +700,10 @@ class Process(windows.winobject.process.WinProcess):
         """imports returns a dict of main EXE imports like {'ntdll.dll': {'Sleep': <IATEntry type - .addr .value>, ...}, ...}"""
         if not self.check_initialized():
             return {}
-        pe = self.peb.modules[0].pe
-        # TODO: cache imports
-        return {dll.lower(): {imp.name: imp for imp in imps} for dll, imps in pe.imports.items() if dll}
+        if not self.__imports:
+            pe = self.peb.modules[0].pe
+            self.__imports = {dll.lower(): {imp.name: imp for imp in imps} for dll, imps in pe.imports.items() if dll}
+        return self.__imports
     
     
     def get_import(self, dll, function):
@@ -714,8 +722,9 @@ class Process(windows.winobject.process.WinProcess):
         """symbols returns a dict of the process exports (all DLL) like {'ntdll.dll': {'Sleep': addr, 213: addr, ...}, ...}"""
         if not self.check_initialized():
             return {}
-        # TODO: cache symbols
-        return {module.pe.export_name.lower(): module.pe.exports for module in self.peb.modules if module.pe.export_name}
+        if not self.__symbols:
+            self.__symbols = {module.pe.export_name.lower(): module.pe.exports for module in self.peb.modules if module.pe.export_name}
+        return self.__symbols
     
     
     def get_proc_address(self, dll, function):
@@ -733,7 +742,18 @@ class Process(windows.winobject.process.WinProcess):
         """libs returns a dict of loaded modules with their baseaddr like {'ntdll.dll': 0x123456000, ...}"""
         if not self.check_initialized():
             return {}
-        return {module.name.lower(): module.baseaddr for module in self.peb.modules if module.name}
+        if not self.__libs:
+            self.__libs = {module.name.lower(): module.baseaddr for module in self.peb.modules if module.name}
+        return self.__libs
+    
+    
+    @property
+    def offsets(self):
+        if not self.check_initialized():
+            return {}
+        if not self.__offsets:
+            self.__offsets = {lib: {export: addr - self.libs[lib] for export, addr in self.symbols[lib].items()} for lib in self.symbols if lib in self.libs}
+        return self.__offsets
     
     
     def close(self):
@@ -741,17 +761,22 @@ class Process(windows.winobject.process.WinProcess):
         if not self.is_exit:
             self.exit(0)
         
-    def spawn_debugger(self, breakin = True, dbg_cmd = None):
+    def spawn_debugger(self, breakin = True, dbg_cmd = None, x96dbg = False, sleep = 1):
         """spawn_debugger(breakin = True, dbg_cmd = None) spawns Windbg (self.debuggerpath) to debug the process"""
-        cmd = [self.debuggerpath, '-p', str(self.pid)]
-        if not breakin:
-            cmd.append('-g')
-        if dbg_cmd:
-            cmd.append('-c')
-            cmd.append(dbg_cmd)
+        if x96dbg:
+            if not self.x96dbg_path:
+                raise ValueError('x96dbg_path not initialized')
+            cmd = [self.x96dbg_path, '-p', str(self.pid)]
+        else:
+            cmd = [self.debuggerpath, '-p', str(self.pid)]
+            if not breakin:
+                cmd.append('-g')
+            if dbg_cmd:
+                cmd.append('-c')
+                cmd.append(dbg_cmd)
         self.debugger = Process(cmd, nostdhandles=True)
-        # Give time to the debugger
-        time.sleep(1)
+        #Give time to the debugger
+        time.sleep(sleep)
 
 # TODO: Modify PythonForWindows assembly helpers to prevent NULL bytes in the shellcode
 # https://github.com/hakril/PythonForWindows/blob/master/windows/native_exec/nativeutils.py
@@ -861,3 +886,86 @@ shellcraft.amd64.LoadLibrary = sc_64_LoadLibrary
 
 shellcraft.amd64.AllocRWX = sc_64_AllocRWX
 """shellcraft.amd64.AllocRWX(addr, rwx_qword) returns str shellcode allocating rwx, writing rwx_qword and jumping on it"""
+
+
+def de_bruijn(alphabet = None, n = None):
+    if alphabet is None:
+        alphabet = alpha
+    if n is None:
+        n = 4
+    k = len(alphabet)
+    a = [0] * k * n
+    def db(t, p):
+        if t > n:
+            if n % p == 0:
+                for j in range(1, p + 1):
+                    yield alphabet[a[j]]
+        else:
+            a[t] = a[t - p]
+            for c in db(t + 1, p):
+                yield c
+
+            for j in range(a[t - p] + 1, k):
+                a[t] = j
+                for c in db(t + 1, t):
+                    yield c
+
+    return db(1,1)
+
+def cyclic(length = None, alphabet = None, n = None):
+    if n is None:
+        n = 4
+
+    if alphabet is None:
+        alphabet = alpha
+
+    if len(alphabet) ** n < length:
+        log.error("Can't create a pattern length=%i with len(alphabet)==%i and n==%i" \
+                  % (length, len(alphabet), n))
+
+    out = []
+    for ndx, c in enumerate(de_bruijn(alphabet, n)):
+        if length != None and ndx >= length:
+            break
+        else:
+            out.append(c)
+
+    if isinstance(alphabet, str):
+        return ''.join(out)
+    else:
+        return out
+
+def cyclic_find(subseq, alphabet = None, n = None):
+    if n is None:
+        n = 4
+
+    if len(subseq) != n:
+        log.warn_once("cyclic_find() expects %i-byte subsequences by default, you gave %r\n"\
+            + "Unless you specified cyclic(..., n=%i), you probably just want the first 4 bytes.\n"\
+            + "Truncating the data at 4 bytes.  Specify cyclic_find(..., n=%i) to override this.",
+            n, subseq, len(subseq), len(subseq))
+        subseq = subseq[:n]
+
+    if alphabet is None:
+        alphabet = alpha
+
+    if any(c not in alphabet for c in subseq):
+        return -1
+
+    n = n or len(subseq)
+
+    return _gen_find(subseq, de_bruijn(alphabet, n))
+
+def _gen_find(subseq, generator):
+    subseq = list(subseq)
+    pos = 0
+    saved = []
+
+    for c in generator:
+        saved.append(c)
+        if len(saved) > len(subseq):
+            saved.pop(0)
+            pos += 1
+        if saved == subseq:
+            return pos
+    return -1
