@@ -43,6 +43,8 @@ The [test][EXAMPLE] directory provides some examples of usage:
 
 [PythonForWindows][PYTHONFORWINDOWS] providing a Python implementation to play with Windows.
 
+[pefile][PEFILE] providing PE file parser.
+
 Optionals:
 - [capstone][CAPSTONE]
 - [keystone][KEYSTONE]
@@ -68,6 +70,7 @@ Optionals:
 [CODE]: https://github.com/masthoon/pwintools/blob/master/pwintools.py
 [PWNTOOLS]: https://github.com/Gallopsled/pwntools
 [PYTHONFORWINDOWS]: https://github.com/hakril/PythonForWindows
+[PEFILE]: https://github.com/erocarrera/pefile
 [CAPSTONE]: https://www.capstone-engine.org/
 [KEYSTONE]: https://www.keystone-engine.org/
 [EXAMPLE]: https://github.com/masthoon/pwintools/tree/master/tests

@@ -18,6 +18,7 @@ import windows.generated_def as gdef
 from windows.generated_def.winstructs import *
 import windows.native_exec.simple_x64 as x64
 
+from pefile import PE as PEBase
 
 try:
     import capstone
@@ -777,6 +778,53 @@ class Process(windows.winobject.process.WinProcess):
         self.debugger = Process(cmd, nostdhandles=True)
         #Give time to the debugger
         time.sleep(sleep)
+
+class PE(object):
+    def __init__(self, *args, **kwargs):
+        self.pe = PEBase(*args, **kwargs)
+        self.__dump_dict = None
+        self.__symbols = None
+        self.__sections = None
+
+    @property
+    def dump_dict(self):
+        """dump_dict() cache"""
+        if self.__dump_dict is None:
+            self.__dump_dict = self.pe.dump_dict()
+        return self.__dump_dict
+
+    @property
+    def symbols(self):
+        """symbols dictionary, {name: RVA}"""
+        # TODO: Add more symbols, not just from exports.
+        # Maybe we should search the symbol server?
+        if self.__symbols is None:
+            if 'Exported symbols' in self.dump_dict:
+                self.__symbols = {sym['Name']: sym['RVA'] for sym in self.dump_dict['Exported symbols'][1:] if sym['Name']}
+            else:
+                self.__symbols = {}
+        return self.__symbols
+    
+    @property
+    def sections(self):
+        """sections dictionary, {name: (RVA, 'RWX')}"""
+        if self.__sections is None:
+            def prot(flags):
+                prot = ''
+                if 'IMAGE_SCN_MEM_READ' in flags:
+                    prot += 'R'
+                if 'IMAGE_SCN_MEM_WRITE' in flags:
+                    prot += 'W'
+                if 'IMAGE_SCN_MEM_EXECUTE' in flags:
+                    prot += 'X'
+                return prot
+            
+            # avoid pefile.Structure.dump_dict() messing up with strings
+            self.__sections = {sect.Name.rstrip('\x00'): (sect_dump['VirtualAddress']['Value'], prot(sect_dump['Flags'])) \
+                                for (sect, sect_dump) in zip(self.pe.sections, self.dump_dict['PE Sections'])}
+        return self.__sections
+
+            
 
 # TODO: Modify PythonForWindows assembly helpers to prevent NULL bytes in the shellcode
 # https://github.com/hakril/PythonForWindows/blob/master/windows/native_exec/nativeutils.py
